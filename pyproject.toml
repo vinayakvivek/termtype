@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 [tool.setuptools.package-data]
-termtype = ["words.json"]
+termtype = ["words.json", "quotes.json"]
 
 [project.scripts]
 termtype = "termtype.app:cli"

@@ -5,13 +5,14 @@ A [Monkeytype](https://monkeytype.com)-style typing test that runs entirely in y
 ```
                           termtype
 
+                            mode
+              classic   word rain   time attack   quotes
+
                          duration
                       15s   30s   60s
 
                         difficulty
                     easy  medium  hard
-
-             pb  15s: 72 wpm  |  30s: 68 wpm  |  60s: 65 wpm
 
         ← → select · ↑ ↓ row · enter start · s stats · q quit
 ```
@@ -44,48 +45,56 @@ cd termtype
 python -m termtype
 ```
 
-## Features
+## Game modes
 
-- **Typing test** with 15s, 30s, and 60s durations
-- **Three difficulty levels** — easy (common short words), medium (moderate words), hard (longer/uncommon words)
-- **Word dictionary** — 900 words sourced from [google-10000-english](https://github.com/first20hours/google-10000-english), split by frequency and length
-- **Live feedback** — green for correct, red for wrong, underline cursor
-- **Real-time WPM and accuracy** displayed as you type
-- **Word-level wrapping** — words never split across lines
-- **Personal history** — all results saved to `~/.termtype_history.json`
-- **Progress tracking** — braille line graph of your WPM over time
-- **Time period filtering** — view stats for last week, month, year, or all-time
-- **Personal bests** shown on the menu and compared after each test
-- **Per-duration breakdown** — separate stats for each test duration
+### Classic
+The standard typing test. Pick a duration (15s/30s/60s) and difficulty, type as fast and accurately as you can. Tracks WPM, accuracy, and personal bests.
+
+### Word Rain
+Words fall from the top of the screen. Type each word before it hits the bottom. Speed increases over time. You get 3 lives — miss 3 words and it's game over. Tracks score and survival time.
+
+### Time Attack
+Start with 10 seconds on the clock. Each correctly typed word adds +2s. Each mistake costs -1s. Survive as long as you can. A timer bar shows your remaining time turning red when low.
+
+### Quotes
+Type real quotes from famous people. Quotes are fetched fresh from [ZenQuotes API](https://zenquotes.io/) each session and cached locally for offline use. The author is revealed after you finish typing. Bundled fallback quotes included for first launch.
 
 ## Difficulty levels
 
 | Level    | Words | Length  | Description                        |
 |----------|-------|---------|------------------------------------|
-| **easy** | 300   | 1–5     | Common everyday words              |
-| **medium** | 300 | 4–8     | Moderate frequency, longer words   |
-| **hard** | 300   | 6–12    | Less common, challenging words     |
+| **easy** | 300   | 1-5     | Common everyday words              |
+| **medium** | 300 | 4-8     | Moderate frequency, longer words   |
+| **hard** | 300   | 6-12    | Less common, challenging words     |
+
+Word dictionary sourced from [google-10000-english](https://github.com/first20hours/google-10000-english).
 
 ## Controls
 
-| Screen  | Key           | Action                     |
-|---------|---------------|----------------------------|
-| Menu    | `← →`         | Select duration/difficulty |
-| Menu    | `↑ ↓`         | Switch between rows        |
-| Menu    | `Enter`       | Start test                 |
-| Menu    | `s`           | Open stats                 |
-| Menu    | `q`           | Quit                       |
-| Test    | type          | Timer starts on first key  |
-| Test    | `Backspace`   | Delete last character      |
-| Test    | `Esc`         | Cancel test                |
-| Results | `Enter`       | Retry same settings        |
-| Results | `Tab`         | Back to menu               |
-| Results | `s`           | Open stats                 |
-| Results | `q`           | Quit                       |
-| Stats   | `← →`         | Switch time period         |
-| Stats   | `Esc` / `q`   | Back                       |
+| Screen     | Key           | Action                          |
+|------------|---------------|---------------------------------|
+| Menu       | `← →`         | Select option                  |
+| Menu       | `↑ ↓`         | Switch between rows            |
+| Menu       | `Enter`       | Start                          |
+| Menu       | `s`           | Open stats                     |
+| Menu       | `q`           | Quit                           |
+| Classic    | type          | Timer starts on first key      |
+| Classic    | `Backspace`   | Delete last character          |
+| Classic    | `Esc`         | Cancel                         |
+| Word Rain  | type          | Type falling words to destroy  |
+| Word Rain  | `Backspace`   | Clear input                    |
+| Word Rain  | `Esc`         | Quit                           |
+| Time Attack| type          | Type words, +2s correct, -1s wrong |
+| Time Attack| `Esc`         | Quit                           |
+| Quotes     | type          | Type the quote                 |
+| Quotes     | `Esc`         | Cancel                         |
+| Results    | `Enter`       | Retry / next                   |
+| Results    | `Tab`         | Back to menu                   |
+| Results    | `q`           | Quit                           |
+| Stats      | `← →`         | Switch time period             |
+| Stats      | `Esc` / `q`   | Back                           |
 
-## Stats screen
+## Stats & progress
 
 Press `s` to see your progress:
 
@@ -95,11 +104,13 @@ Press `s` to see your progress:
 - **Per-duration breakdown** — stats for 15s, 30s, 60s separately
 - **Recent tests** — table of latest results with PBs highlighted
 
+All data stored in `~/.termtype/`.
+
 ## Requirements
 
 - Python 3.8+
 - A terminal with Unicode support (most modern terminals)
-- No external dependencies
+- No external dependencies (quotes API is optional — works offline)
 
 ## License
 

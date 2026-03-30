@@ -12,8 +12,12 @@ from pathlib import Path
 
 DURATIONS = [15, 30, 60]
 DIFFICULTIES = ["easy", "medium", "hard"]
-HISTORY_FILE = Path.home() / ".termtype_history.json"
+MODES = ["classic", "word rain", "time attack", "quotes"]
+DATA_DIR = Path.home() / ".termtype"
+HISTORY_FILE = DATA_DIR / "history.json"
+QUOTES_CACHE_FILE = DATA_DIR / "quotes_cache.json"
 WORDS_FILE = Path(__file__).parent / "words.json"
+BUNDLED_QUOTES_FILE = Path(__file__).parent / "quotes.json"
 
 COLOR_CORRECT = 1
 COLOR_WRONG = 2
@@ -22,6 +26,16 @@ COLOR_DIM = 4
 COLOR_STAT = 5
 COLOR_TITLE = 6
 COLOR_GRAPH = 7
+
+
+# ── Data directory ───────────────────────────────────────────────────
+
+def _init_data_dir():
+    """Create ~/.termtype/ and migrate old history file if needed."""
+    DATA_DIR.mkdir(exist_ok=True)
+    old_history = Path.home() / ".termtype_history.json"
+    if old_history.exists() and not HISTORY_FILE.exists():
+        old_history.rename(HISTORY_FILE)
 
 
 # ── Word dictionary ──────────────────────────────────────────────────
@@ -38,6 +52,78 @@ def load_words(difficulty="easy"):
     return _word_cache[difficulty]
 
 
+# ── Quotes ───────────────────────────────────────────────────────────
+
+_quotes_pool = []
+
+
+def _fetch_quotes_from_api():
+    """Fetch quotes from ZenQuotes API, return list of {text, author}."""
+    import urllib.request
+    try:
+        data = json.loads(urllib.request.urlopen(
+            "https://zenquotes.io/api/quotes", timeout=5
+        ).read())
+        quotes = [{"text": q["q"], "author": q["a"]}
+                  for q in data if q.get("q") and q["a"] != "zenquotes.io"
+                  and 30 <= len(q["q"]) <= 200]
+        return quotes
+    except Exception:
+        return []
+
+
+def _load_cached_quotes():
+    if QUOTES_CACHE_FILE.exists():
+        try:
+            return json.loads(QUOTES_CACHE_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return []
+
+
+def _save_quotes_cache(quotes):
+    try:
+        existing = _load_cached_quotes()
+        seen = {q["text"] for q in existing}
+        for q in quotes:
+            if q["text"] not in seen:
+                existing.append(q)
+                seen.add(q["text"])
+        QUOTES_CACHE_FILE.write_text(json.dumps(existing, indent=2))
+    except OSError:
+        pass
+
+
+def load_quotes():
+    """Load quotes: try API (and cache), fall back to cache, then bundled."""
+    global _quotes_pool
+    if _quotes_pool:
+        return _quotes_pool
+
+    # Try API first
+    fresh = _fetch_quotes_from_api()
+    if fresh:
+        _save_quotes_cache(fresh)
+
+    # Build pool from cache (includes fresh + previously cached)
+    pool = _load_cached_quotes()
+
+    # Fall back to bundled if nothing cached
+    if not pool:
+        try:
+            pool = json.loads(BUNDLED_QUOTES_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pool = [{"text": "The quick brown fox jumps over the lazy dog.", "author": "Unknown"}]
+
+    _quotes_pool = pool
+    return _quotes_pool
+
+
+def get_random_quote():
+    quotes = load_quotes()
+    return random.choice(quotes)
+
+
 # ── History persistence ──────────────────────────────────────────────
 
 def load_history():
@@ -49,13 +135,14 @@ def load_history():
     return []
 
 
-def save_result(wpm, accuracy, duration, difficulty="easy"):
+def save_result(wpm, accuracy, duration, difficulty="easy", mode="classic"):
     history = load_history()
     history.append({
         "wpm": wpm,
         "accuracy": accuracy,
         "duration": duration,
         "difficulty": difficulty,
+        "mode": mode,
         "date": datetime.now().isoformat(),
     })
     HISTORY_FILE.write_text(json.dumps(history, indent=2))
@@ -319,42 +406,59 @@ def _draw_selector(win, items, selected, y, w, active=True):
         sx += len(label) + 2
 
 
-def draw_menu(win, sel_dur, sel_diff, menu_row, h, w, history):
+def draw_menu(win, sel_mode, sel_dur, sel_diff, menu_row, h, w, history):
     win.clear()
     title = "termtype"
+    cy = h // 2 - 6
     win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
-    win.addstr(h // 2 - 5, w // 2 - len(title) // 2, title)
+    win.addstr(cy, w // 2 - len(title) // 2, title)
     win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
 
-    # Duration row
-    dur_label = "duration"
-    win.addstr(h // 2 - 3, w // 2 - len(dur_label) // 2, dur_label, curses.color_pair(COLOR_DIM))
-    dur_items = [f"{d}s" for d in DURATIONS]
-    _draw_selector(win, dur_items, sel_dur, h // 2 - 2, w, active=(menu_row == 0))
+    # Mode row
+    mode_label = "mode"
+    win.addstr(cy + 2, w // 2 - len(mode_label) // 2, mode_label, curses.color_pair(COLOR_DIM))
+    _draw_selector(win, MODES, sel_mode, cy + 3, w, active=(menu_row == 0))
+
+    mode = MODES[sel_mode]
+    show_duration = mode in ("classic",)
+    show_difficulty = mode in ("classic", "word rain", "time attack")
+
+    # Duration row (only for classic)
+    row = cy + 5
+    if show_duration:
+        dur_label = "duration"
+        win.addstr(row, w // 2 - len(dur_label) // 2, dur_label, curses.color_pair(COLOR_DIM))
+        dur_items = [f"{d}s" for d in DURATIONS]
+        _draw_selector(win, dur_items, sel_dur, row + 1, w, active=(menu_row == 1))
+        row += 3
 
     # Difficulty row
-    diff_label = "difficulty"
-    win.addstr(h // 2, w // 2 - len(diff_label) // 2, diff_label, curses.color_pair(COLOR_DIM))
-    _draw_selector(win, DIFFICULTIES, sel_diff, h // 2 + 1, w, active=(menu_row == 1))
+    if show_difficulty:
+        diff_label = "difficulty"
+        win.addstr(row, w // 2 - len(diff_label) // 2, diff_label, curses.color_pair(COLOR_DIM))
+        diff_row_idx = 2 if show_duration else 1
+        _draw_selector(win, DIFFICULTIES, sel_diff, row + 1, w, active=(menu_row == diff_row_idx))
+        row += 3
 
-    # Show quick personal best for each duration at current difficulty
-    difficulty = DIFFICULTIES[sel_diff]
-    filtered = [e for e in history if e.get("difficulty", "easy") == difficulty]
-    if filtered:
-        pb_y = h // 2 + 3
-        pb_parts = []
-        for d in DURATIONS:
-            stats = get_stats(filtered, d)
-            if stats:
-                pb_parts.append(f"{d}s: {stats['best_wpm']} wpm")
-            else:
-                pb_parts.append(f"{d}s: --")
-        pb_line = "pb  " + "  |  ".join(pb_parts)
-        win.addstr(pb_y, w // 2 - len(pb_line) // 2, "pb  ", curses.color_pair(COLOR_STAT) | curses.A_BOLD)
-        win.addstr(pb_y, w // 2 - len(pb_line) // 2 + 4, "  |  ".join(pb_parts), curses.color_pair(COLOR_DIM))
+    # Personal bests (classic mode)
+    if mode == "classic" and show_difficulty:
+        difficulty = DIFFICULTIES[sel_diff]
+        filtered = [e for e in history if e.get("difficulty", "easy") == difficulty
+                    and e.get("mode", "classic") == "classic"]
+        if filtered:
+            pb_parts = []
+            for d in DURATIONS:
+                stats = get_stats(filtered, d)
+                if stats:
+                    pb_parts.append(f"{d}s: {stats['best_wpm']} wpm")
+                else:
+                    pb_parts.append(f"{d}s: --")
+            pb_line = "pb  " + "  |  ".join(pb_parts)
+            win.addstr(row, w // 2 - len(pb_line) // 2, "pb  ", curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+            win.addstr(row, w // 2 - len(pb_line) // 2 + 4, "  |  ".join(pb_parts), curses.color_pair(COLOR_DIM))
 
     hint = "← → select · ↑ ↓ row · enter start · s stats · q quit"
-    win.addstr(h // 2 + 6, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+    win.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
     win.refresh()
 
 
@@ -518,9 +622,9 @@ def show_stats_screen(win, history):
             period_idx = min(len(PERIODS) - 1, period_idx + 1)
 
 
-# ── Test runner ──────────────────────────────────────────────────────
+# ── Classic test runner ──────────────────────────────────────────────
 
-def run_test(stdscr, duration, difficulty="easy"):
+def run_classic(stdscr, duration, difficulty="easy"):
     text = generate_text(difficulty=difficulty, count=max(80, duration * 3))
     typed = []
     start_time = None
@@ -541,25 +645,20 @@ def run_test(stdscr, duration, difficulty="easy"):
 
         stdscr.clear()
 
-        # Title
         title = "termtype"
         stdscr.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
         stdscr.addstr(1, w // 2 - len(title) // 2, title)
         stdscr.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
 
-        # Timer
         if start_time:
             draw_timer(stdscr, remaining, duration, 1, w // 2 + len(title) // 2 + 2)
 
-        # Live stats
         if start_time and len(typed) > 0:
             wpm, accuracy = calc_wpm(typed, text, elapsed)
             draw_live_stats(stdscr, wpm, accuracy, 3, pad_x)
 
-        # Text area
         draw_text(stdscr, text, typed, len(typed), 5, pad_x, pad_x + text_w)
 
-        # Hint
         if not start_time:
             hint = "start typing..."
             stdscr.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
@@ -576,15 +675,12 @@ def run_test(stdscr, duration, difficulty="easy"):
 
         if key == -1:
             continue
-
-        if key == 27:  # ESC
+        if key == 27:
             return None, None
-
         if key in (curses.KEY_BACKSPACE, 127, 8):
             if typed:
                 typed.pop()
             continue
-
         if 32 <= key <= 126:
             if start_time is None:
                 start_time = time.time()
@@ -592,9 +688,359 @@ def run_test(stdscr, duration, difficulty="easy"):
                 typed.append(chr(key))
 
 
+# ── Word Rain mode ──────────────────────────────────────────────────
+
+def run_word_rain(stdscr, difficulty="easy"):
+    """Words fall from top. Type them before they reach the bottom."""
+    words_list = load_words(difficulty)
+    stdscr.timeout(50)
+
+    active_words = []  # list of {word, x, y (float), typed}
+    lives = 3
+    score = 0
+    start_time = time.time()
+    last_spawn = 0
+    spawn_interval = 2.0  # seconds between spawns
+    fall_speed = 0.15     # rows per frame
+    input_buf = ""
+
+    while lives > 0:
+        h, w = stdscr.getmaxyx()
+        now = time.time()
+        elapsed = now - start_time
+
+        # Increase difficulty over time
+        fall_speed = 0.15 + elapsed / 300  # gradually faster
+        spawn_interval = max(0.8, 2.0 - elapsed / 120)
+
+        # Spawn new word
+        if now - last_spawn > spawn_interval:
+            word = random.choice(words_list)
+            x = random.randint(2, max(3, w - len(word) - 2))
+            active_words.append({"word": word, "x": x, "y": 0.0})
+            last_spawn = now
+
+        # Move words down
+        for aw in active_words:
+            aw["y"] += fall_speed
+
+        # Check for words hitting bottom
+        fallen = [aw for aw in active_words if aw["y"] >= h - 3]
+        for aw in fallen:
+            lives -= 1
+            active_words.remove(aw)
+
+        # Draw
+        stdscr.clear()
+
+        # Header
+        header = f" word rain   score: {score}   "
+        lives_str = "♥ " * lives + "♡ " * (3 - lives)
+        stdscr.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+        stdscr.addstr(0, 1, header)
+        stdscr.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+        stdscr.addstr(0, len(header) + 1, lives_str.strip(), curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
+        time_str = f"{int(elapsed)}s"
+        stdscr.addstr(0, w - len(time_str) - 2, time_str, curses.color_pair(COLOR_DIM))
+
+        # Draw falling words
+        for aw in active_words:
+            row = int(aw["y"])
+            if 1 <= row < h - 2:
+                word = aw["word"]
+                # Highlight matching prefix
+                for ci, ch in enumerate(word):
+                    if ci < len(input_buf) and word[:len(input_buf)] == input_buf[:len(input_buf)] and ci < len(input_buf) and word.startswith(input_buf):
+                        attr = curses.color_pair(COLOR_CORRECT) | curses.A_BOLD
+                    else:
+                        attr = curses.color_pair(COLOR_CURSOR) | curses.A_BOLD
+                    try:
+                        win_x = aw["x"] + ci
+                        if win_x < w:
+                            stdscr.addch(row, win_x, ch, attr)
+                    except curses.error:
+                        pass
+
+        # Input line
+        input_line = f"> {input_buf}_"
+        stdscr.addstr(h - 2, 1, input_line, curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+
+        hint = "type words to destroy them · esc to quit"
+        stdscr.addstr(h - 1, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+
+        stdscr.refresh()
+
+        try:
+            key = stdscr.getch()
+        except curses.error:
+            continue
+
+        if key == -1:
+            continue
+        if key == 27:
+            return None, None
+        if key in (curses.KEY_BACKSPACE, 127, 8):
+            input_buf = input_buf[:-1]
+            continue
+
+        if 32 <= key <= 126:
+            input_buf += chr(key)
+
+            # Check if input matches any active word
+            matched = None
+            for aw in active_words:
+                if aw["word"] == input_buf:
+                    matched = aw
+                    break
+            if matched:
+                active_words.remove(matched)
+                score += len(matched["word"])
+                input_buf = ""
+
+    # Game over
+    elapsed = time.time() - start_time
+    return score, round(elapsed, 1)
+
+
+def draw_word_rain_results(win, score, time_survived, h, w):
+    win.clear()
+    title = "game over"
+    win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+    win.addstr(h // 2 - 3, w // 2 - len(title) // 2, title)
+    win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+
+    score_str = f"score: {score}"
+    time_str = f"survived: {time_survived}s"
+    win.attron(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+    win.addstr(h // 2, w // 2 - len(score_str) // 2, score_str)
+    win.attroff(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+    win.addstr(h // 2 + 1, w // 2 - len(time_str) // 2, time_str, curses.color_pair(COLOR_DIM))
+
+    hint = "enter retry · tab menu · q quit"
+    win.addstr(h // 2 + 5, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+    win.refresh()
+
+
+# ── Time Attack mode ────────────────────────────────────────────────
+
+def run_time_attack(stdscr, difficulty="easy"):
+    """Type words to gain time. Mistakes cost time. Survive as long as you can."""
+    words_list = load_words(difficulty)
+    stdscr.timeout(50)
+
+    time_left = 10.0
+    score = 0
+    words_typed = 0
+    current_word = random.choice(words_list)
+    input_buf = ""
+    last_tick = time.time()
+    start_time = last_tick
+
+    while time_left > 0:
+        h, w = stdscr.getmaxyx()
+        now = time.time()
+        dt = now - last_tick
+        last_tick = now
+        time_left -= dt
+
+        if time_left <= 0:
+            break
+
+        stdscr.clear()
+
+        # Header
+        title = "time attack"
+        stdscr.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+        stdscr.addstr(1, w // 2 - len(title) // 2, title)
+        stdscr.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+
+        # Timer bar
+        bar_w = min(40, w - 10)
+        bar_x = w // 2 - bar_w // 2
+        filled = max(0, int(time_left / 15 * bar_w))
+        timer_color = COLOR_CORRECT if time_left > 5 else COLOR_WRONG
+        stdscr.addstr(3, bar_x, "█" * filled, curses.color_pair(timer_color) | curses.A_BOLD)
+        stdscr.addstr(3, bar_x + filled, "░" * (bar_w - filled), curses.color_pair(COLOR_DIM))
+        timer_str = f" {time_left:.1f}s"
+        stdscr.addstr(3, bar_x + bar_w + 1, timer_str, curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+
+        # Score
+        score_str = f"score: {score}   words: {words_typed}"
+        stdscr.addstr(5, w // 2 - len(score_str) // 2, score_str, curses.color_pair(COLOR_DIM))
+
+        # Current word (large, centered)
+        word_x = w // 2 - len(current_word) // 2
+        for ci, ch in enumerate(current_word):
+            if ci < len(input_buf):
+                if input_buf[ci] == ch:
+                    attr = curses.color_pair(COLOR_CORRECT) | curses.A_BOLD
+                else:
+                    attr = curses.color_pair(COLOR_WRONG) | curses.A_BOLD
+            else:
+                attr = curses.color_pair(COLOR_DIM) | curses.A_BOLD
+            try:
+                stdscr.addch(h // 2, word_x + ci, ch, attr)
+            except curses.error:
+                pass
+
+        # Input below
+        cursor = f"> {input_buf}_"
+        stdscr.addstr(h // 2 + 2, w // 2 - len(cursor) // 2, cursor, curses.color_pair(COLOR_STAT))
+
+        # Bonuses info
+        info = "+2s correct   -1s wrong"
+        stdscr.addstr(h - 3, w // 2 - len(info) // 2, info, curses.color_pair(COLOR_DIM))
+        hint = "esc to quit"
+        stdscr.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+
+        stdscr.refresh()
+
+        try:
+            key = stdscr.getch()
+        except curses.error:
+            continue
+
+        if key == -1:
+            continue
+        if key == 27:
+            return None, None
+        if key in (curses.KEY_BACKSPACE, 127, 8):
+            input_buf = input_buf[:-1]
+            continue
+
+        if 32 <= key <= 126:
+            input_buf += chr(key)
+
+            if len(input_buf) == len(current_word):
+                if input_buf == current_word:
+                    score += len(current_word)
+                    time_left += 2.0
+                    words_typed += 1
+                else:
+                    time_left -= 1.0
+                input_buf = ""
+                current_word = random.choice(words_list)
+
+    elapsed = time.time() - start_time
+    return score, words_typed
+
+
+def draw_time_attack_results(win, score, words_typed, h, w):
+    win.clear()
+    title = "time's up!"
+    win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+    win.addstr(h // 2 - 3, w // 2 - len(title) // 2, title)
+    win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+
+    score_str = f"score: {score}"
+    words_str = f"words: {words_typed}"
+    win.attron(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+    win.addstr(h // 2, w // 2 - len(score_str) // 2, score_str)
+    win.attroff(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+    win.addstr(h // 2 + 1, w // 2 - len(words_str) // 2, words_str, curses.color_pair(COLOR_DIM))
+
+    hint = "enter retry · tab menu · q quit"
+    win.addstr(h // 2 + 5, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+    win.refresh()
+
+
+# ── Quote Mode ──────────────────────────────────────────────────────
+
+def run_quotes(stdscr):
+    """Type real quotes. Shows author after completion."""
+    quote = get_random_quote()
+    text = quote["text"]
+    author = quote["author"]
+    typed = []
+    start_time = None
+
+    stdscr.timeout(100)
+
+    while True:
+        h, w = stdscr.getmaxyx()
+        pad_x = max(2, (w - min(w - 4, 80)) // 2)
+        text_w = min(w - 4, 80)
+
+        elapsed = time.time() - start_time if start_time else 0
+
+        # Check if done
+        if len(typed) == len(text):
+            wpm, accuracy = calc_wpm(typed, text, elapsed)
+            return wpm, accuracy, author
+
+        stdscr.clear()
+
+        title = "quotes"
+        stdscr.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+        stdscr.addstr(1, w // 2 - len(title) // 2, title)
+        stdscr.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+
+        if start_time:
+            time_str = f" {int(elapsed)}s"
+            stdscr.addstr(1, w // 2 + len(title) // 2 + 2, time_str, curses.color_pair(COLOR_DIM))
+
+        if start_time and len(typed) > 0:
+            wpm, accuracy = calc_wpm(typed, text, elapsed)
+            draw_live_stats(stdscr, wpm, accuracy, 3, pad_x)
+
+        draw_text(stdscr, text, typed, len(typed), 5, pad_x, pad_x + text_w)
+
+        if not start_time:
+            hint = "start typing..."
+            stdscr.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+        else:
+            hint = "esc to cancel"
+            stdscr.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+
+        stdscr.refresh()
+
+        try:
+            key = stdscr.getch()
+        except curses.error:
+            continue
+
+        if key == -1:
+            continue
+        if key == 27:
+            return None, None, None
+        if key in (curses.KEY_BACKSPACE, 127, 8):
+            if typed:
+                typed.pop()
+            continue
+        if 32 <= key <= 126:
+            if start_time is None:
+                start_time = time.time()
+            if len(typed) < len(text):
+                typed.append(chr(key))
+
+
+def draw_quote_results(win, wpm, accuracy, author, h, w):
+    win.clear()
+    title = "done!"
+    win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+    win.addstr(h // 2 - 4, w // 2 - len(title) // 2, title)
+    win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+
+    wpm_str = f"wpm: {wpm}"
+    acc_str = f"accuracy: {accuracy}%"
+    author_str = f"— {author}"
+
+    win.attron(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+    win.addstr(h // 2 - 1, w // 2 - len(wpm_str) // 2, wpm_str)
+    win.attroff(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+    win.addstr(h // 2, w // 2 - len(acc_str) // 2, acc_str, curses.color_pair(COLOR_DIM))
+    win.addstr(h // 2 + 2, w // 2 - len(author_str) // 2, author_str,
+               curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+
+    hint = "enter next quote · tab menu · q quit"
+    win.addstr(h // 2 + 6, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+    win.refresh()
+
+
 # ── Main loop ────────────────────────────────────────────────────────
 
 def main(stdscr):
+    _init_data_dir()
     curses.curs_set(0)
     curses.use_default_colors()
     curses.init_pair(COLOR_CORRECT, curses.COLOR_GREEN, -1)
@@ -605,17 +1051,24 @@ def main(stdscr):
     curses.init_pair(COLOR_TITLE, curses.COLOR_CYAN, -1)
     curses.init_pair(COLOR_GRAPH, curses.COLOR_MAGENTA, -1)
 
+    sel_mode = 0   # default classic
     sel_dur = 1    # default 30s
     sel_diff = 0   # default easy
-    menu_row = 0   # 0 = duration row, 1 = difficulty row
+    menu_row = 0   # 0 = mode, 1 = duration (if shown), 2 = difficulty (if shown)
     stdscr.timeout(100)
 
     while True:
         h, w = stdscr.getmaxyx()
         history = load_history()
+        mode = MODES[sel_mode]
+
+        # How many menu rows for this mode
+        show_duration = mode in ("classic",)
+        show_difficulty = mode in ("classic", "word rain", "time attack")
+        max_rows = 1 + (1 if show_duration else 0) + (1 if show_difficulty else 0)
 
         # --- MENU ---
-        draw_menu(stdscr, sel_dur, sel_diff, menu_row, h, w, history)
+        draw_menu(stdscr, sel_mode, sel_dur, sel_diff, menu_row, h, w, history)
         key = stdscr.getch()
         if key == -1:
             continue
@@ -629,59 +1082,141 @@ def main(stdscr):
             menu_row = max(0, menu_row - 1)
             continue
         if key == curses.KEY_DOWN:
-            menu_row = min(1, menu_row + 1)
+            menu_row = min(max_rows - 1, menu_row + 1)
             continue
         if key == curses.KEY_LEFT:
             if menu_row == 0:
+                sel_mode = max(0, sel_mode - 1)
+                menu_row = 0  # reset when mode changes
+            elif menu_row == 1 and show_duration:
                 sel_dur = max(0, sel_dur - 1)
             else:
                 sel_diff = max(0, sel_diff - 1)
             continue
         if key == curses.KEY_RIGHT:
             if menu_row == 0:
+                sel_mode = min(len(MODES) - 1, sel_mode + 1)
+                menu_row = 0
+            elif menu_row == 1 and show_duration:
                 sel_dur = min(len(DURATIONS) - 1, sel_dur + 1)
             else:
                 sel_diff = min(len(DIFFICULTIES) - 1, sel_diff + 1)
             continue
-        if key in (curses.KEY_ENTER, 10, 13):
-            duration = DURATIONS[sel_dur]
-            difficulty = DIFFICULTIES[sel_diff]
-        else:
+        if key not in (curses.KEY_ENTER, 10, 13):
             continue
 
-        # --- TEST ---
-        wpm, accuracy = run_test(stdscr, duration, difficulty)
-        if wpm is None:
-            continue
+        duration = DURATIONS[sel_dur]
+        difficulty = DIFFICULTIES[sel_diff]
 
-        # Save to history
-        save_result(wpm, accuracy, duration, difficulty)
-        history = load_history()
-
-        # --- RESULTS ---
-        stdscr.timeout(-1)
-        while True:
-            h, w = stdscr.getmaxyx()
-            draw_results(stdscr, wpm, accuracy, duration, difficulty, h, w, history)
-            key = stdscr.getch()
-            if key in (ord('q'), ord('Q')):
-                return
-            if key in (ord('s'), ord('S')):
-                show_stats_screen(stdscr, history)
-                stdscr.timeout(-1)
+        # --- RUN SELECTED MODE ---
+        if mode == "classic":
+            result = run_classic(stdscr, duration, difficulty)
+            if result[0] is None:
                 continue
-            if key in (curses.KEY_ENTER, 10, 13):
-                stdscr.timeout(100)
-                wpm, accuracy = run_test(stdscr, duration, difficulty)
-                if wpm is None:
+            wpm, accuracy = result
+            save_result(wpm, accuracy, duration, difficulty)
+            history = load_history()
+
+            # Results loop
+            stdscr.timeout(-1)
+            while True:
+                h, w = stdscr.getmaxyx()
+                draw_results(stdscr, wpm, accuracy, duration, difficulty, h, w, history)
+                key = stdscr.getch()
+                if key in (ord('q'), ord('Q')):
+                    return
+                if key in (ord('s'), ord('S')):
+                    show_stats_screen(stdscr, history)
+                    stdscr.timeout(-1)
+                    continue
+                if key in (curses.KEY_ENTER, 10, 13):
+                    stdscr.timeout(100)
+                    result = run_classic(stdscr, duration, difficulty)
+                    if result[0] is None:
+                        break
+                    wpm, accuracy = result
+                    save_result(wpm, accuracy, duration, difficulty)
+                    history = load_history()
+                    stdscr.timeout(-1)
+                    continue
+                if key == 9:
+                    stdscr.timeout(100)
                     break
-                save_result(wpm, accuracy, duration, difficulty)
-                history = load_history()
-                stdscr.timeout(-1)
+
+        elif mode == "word rain":
+            result = run_word_rain(stdscr, difficulty)
+            if result[0] is None:
                 continue
-            if key == 9:  # tab
-                stdscr.timeout(100)
-                break
+            score, time_survived = result
+
+            stdscr.timeout(-1)
+            while True:
+                h, w = stdscr.getmaxyx()
+                draw_word_rain_results(stdscr, score, time_survived, h, w)
+                key = stdscr.getch()
+                if key in (ord('q'), ord('Q')):
+                    return
+                if key in (curses.KEY_ENTER, 10, 13):
+                    stdscr.timeout(50)
+                    result = run_word_rain(stdscr, difficulty)
+                    if result[0] is None:
+                        break
+                    score, time_survived = result
+                    stdscr.timeout(-1)
+                    continue
+                if key == 9:
+                    stdscr.timeout(100)
+                    break
+
+        elif mode == "time attack":
+            result = run_time_attack(stdscr, difficulty)
+            if result[0] is None:
+                continue
+            score, words_typed = result
+
+            stdscr.timeout(-1)
+            while True:
+                h, w = stdscr.getmaxyx()
+                draw_time_attack_results(stdscr, score, words_typed, h, w)
+                key = stdscr.getch()
+                if key in (ord('q'), ord('Q')):
+                    return
+                if key in (curses.KEY_ENTER, 10, 13):
+                    stdscr.timeout(50)
+                    result = run_time_attack(stdscr, difficulty)
+                    if result[0] is None:
+                        break
+                    score, words_typed = result
+                    stdscr.timeout(-1)
+                    continue
+                if key == 9:
+                    stdscr.timeout(100)
+                    break
+
+        elif mode == "quotes":
+            result = run_quotes(stdscr)
+            if result[0] is None:
+                continue
+            wpm, accuracy, author = result
+
+            stdscr.timeout(-1)
+            while True:
+                h, w = stdscr.getmaxyx()
+                draw_quote_results(stdscr, wpm, accuracy, author, h, w)
+                key = stdscr.getch()
+                if key in (ord('q'), ord('Q')):
+                    return
+                if key in (curses.KEY_ENTER, 10, 13):
+                    stdscr.timeout(100)
+                    result = run_quotes(stdscr)
+                    if result[0] is None:
+                        break
+                    wpm, accuracy, author = result
+                    stdscr.timeout(-1)
+                    continue
+                if key == 9:
+                    stdscr.timeout(100)
+                    break
 
 
 def cli():
