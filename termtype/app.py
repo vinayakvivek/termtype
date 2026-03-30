@@ -10,37 +10,10 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-WORDS = [
-    "the", "be", "to", "of", "and", "a", "in", "that", "have", "i",
-    "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
-    "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
-    "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
-    "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
-    "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
-    "people", "into", "year", "your", "good", "some", "could", "them", "see",
-    "other", "than", "then", "now", "look", "only", "come", "its", "over",
-    "think", "also", "back", "after", "use", "two", "how", "our", "work",
-    "first", "well", "way", "even", "new", "want", "because", "any", "these",
-    "give", "day", "most", "us", "great", "between", "need", "large", "under",
-    "never", "city", "tree", "cross", "still", "build", "earth", "every",
-    "found", "place", "made", "after", "again", "where", "right", "line",
-    "before", "many", "long", "very", "much", "write", "thing", "water",
-    "been", "call", "keep", "through", "while", "last", "might", "down",
-    "should", "run", "world", "each", "below", "name", "always", "school",
-    "house", "point", "hand", "high", "kind", "help", "left", "turn", "move",
-    "must", "big", "state", "old", "home", "small", "number", "off", "away",
-    "play", "spell", "air", "such", "change", "little", "end", "put",
-    "read", "port", "man", "land", "here", "same", "tell", "boy", "did",
-    "follow", "came", "show", "form", "three", "set", "seem", "start",
-    "city", "story", "head", "far", "black", "hard", "near", "grow",
-    "food", "real", "life", "few", "stop", "open", "plant", "close", "night",
-    "white", "began", "idea", "fish", "river", "group", "both", "often",
-    "paper", "music", "those", "car", "learn", "above", "own", "page",
-    "letter", "mother", "answer", "color", "south", "problem", "piece",
-]
-
 DURATIONS = [15, 30, 60]
+DIFFICULTIES = ["easy", "medium", "hard"]
 HISTORY_FILE = Path.home() / ".termtype_history.json"
+WORDS_FILE = Path(__file__).parent / "words.json"
 
 COLOR_CORRECT = 1
 COLOR_WRONG = 2
@@ -49,6 +22,20 @@ COLOR_DIM = 4
 COLOR_STAT = 5
 COLOR_TITLE = 6
 COLOR_GRAPH = 7
+
+
+# ── Word dictionary ──────────────────────────────────────────────────
+
+_word_cache = {}
+
+
+def load_words(difficulty="easy"):
+    if difficulty in _word_cache:
+        return _word_cache[difficulty]
+    words = json.loads(WORDS_FILE.read_text())
+    for k, v in words.items():
+        _word_cache[k] = v
+    return _word_cache[difficulty]
 
 
 # ── History persistence ──────────────────────────────────────────────
@@ -62,12 +49,13 @@ def load_history():
     return []
 
 
-def save_result(wpm, accuracy, duration):
+def save_result(wpm, accuracy, duration, difficulty="easy"):
     history = load_history()
     history.append({
         "wpm": wpm,
         "accuracy": accuracy,
         "duration": duration,
+        "difficulty": difficulty,
         "date": datetime.now().isoformat(),
     })
     HISTORY_FILE.write_text(json.dumps(history, indent=2))
@@ -94,8 +82,9 @@ def get_stats(history, duration=None):
 
 # ── Drawing helpers ──────────────────────────────────────────────────
 
-def generate_text(count=60):
-    return " ".join(random.choice(WORDS) for _ in range(count))
+def generate_text(difficulty="easy", count=60):
+    words = load_words(difficulty)
+    return " ".join(random.choice(words) for _ in range(count))
 
 
 def draw_timer(win, remaining, duration, y, x):
@@ -311,34 +300,49 @@ def _date_label(iso_str, period_name):
 
 # ── Screens ──────────────────────────────────────────────────────────
 
-def draw_menu(win, durations, selected, h, w, history):
+def _draw_selector(win, items, selected, y, w, active=True):
+    """Draw a horizontal selector row, return nothing."""
+    total_w = sum(len(f" {item} ") for item in items) + (len(items) - 1) * 2
+    sx = w // 2 - total_w // 2
+    for i, item in enumerate(items):
+        label = f" {item} "
+        if i == selected and active:
+            win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD | curses.A_REVERSE)
+            win.addstr(y, sx, label)
+            win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD | curses.A_REVERSE)
+        elif i == selected and not active:
+            win.addstr(y, sx, label, curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+        else:
+            win.addstr(y, sx, label, curses.color_pair(COLOR_DIM))
+        sx += len(label) + 2
+
+
+def draw_menu(win, sel_dur, sel_diff, menu_row, h, w, history):
     win.clear()
     title = "termtype"
     win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
-    win.addstr(h // 2 - 4, w // 2 - len(title) // 2, title)
+    win.addstr(h // 2 - 5, w // 2 - len(title) // 2, title)
     win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
 
-    subtitle = "select duration"
-    win.addstr(h // 2 - 2, w // 2 - len(subtitle) // 2, subtitle, curses.color_pair(COLOR_DIM))
+    # Duration row
+    dur_label = "duration"
+    win.addstr(h // 2 - 3, w // 2 - len(dur_label) // 2, dur_label, curses.color_pair(COLOR_DIM))
+    dur_items = [f"{d}s" for d in DURATIONS]
+    _draw_selector(win, dur_items, sel_dur, h // 2 - 2, w, active=(menu_row == 0))
 
-    total_w = sum(len(f" {d}s ") for d in durations) + (len(durations) - 1) * 2
-    sx = w // 2 - total_w // 2
-    for i, d in enumerate(durations):
-        label = f" {d}s "
-        if i == selected:
-            win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD | curses.A_REVERSE)
-            win.addstr(h // 2, sx, label)
-            win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD | curses.A_REVERSE)
-        else:
-            win.addstr(h // 2, sx, label, curses.color_pair(COLOR_DIM))
-        sx += len(label) + 2
+    # Difficulty row
+    diff_label = "difficulty"
+    win.addstr(h // 2, w // 2 - len(diff_label) // 2, diff_label, curses.color_pair(COLOR_DIM))
+    _draw_selector(win, DIFFICULTIES, sel_diff, h // 2 + 1, w, active=(menu_row == 1))
 
-    # Show quick personal best for each duration
-    if history:
-        pb_y = h // 2 + 2
+    # Show quick personal best for each duration at current difficulty
+    difficulty = DIFFICULTIES[sel_diff]
+    filtered = [e for e in history if e.get("difficulty", "easy") == difficulty]
+    if filtered:
+        pb_y = h // 2 + 3
         pb_parts = []
-        for d in durations:
-            stats = get_stats(history, d)
+        for d in DURATIONS:
+            stats = get_stats(filtered, d)
             if stats:
                 pb_parts.append(f"{d}s: {stats['best_wpm']} wpm")
             else:
@@ -347,12 +351,12 @@ def draw_menu(win, durations, selected, h, w, history):
         win.addstr(pb_y, w // 2 - len(pb_line) // 2, "pb  ", curses.color_pair(COLOR_STAT) | curses.A_BOLD)
         win.addstr(pb_y, w // 2 - len(pb_line) // 2 + 4, "  |  ".join(pb_parts), curses.color_pair(COLOR_DIM))
 
-    hint = "← → select · enter start · s stats · q quit"
-    win.addstr(h // 2 + 5, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+    hint = "← → select · ↑ ↓ row · enter start · s stats · q quit"
+    win.addstr(h // 2 + 6, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
     win.refresh()
 
 
-def draw_results(win, wpm, accuracy, duration, h, w, history):
+def draw_results(win, wpm, accuracy, duration, difficulty, h, w, history):
     win.clear()
     title = "results"
     win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
@@ -361,7 +365,7 @@ def draw_results(win, wpm, accuracy, duration, h, w, history):
 
     wpm_str = f"wpm: {wpm}"
     acc_str = f"accuracy: {accuracy}%"
-    dur_str = f"duration: {duration}s"
+    dur_str = f"{duration}s · {difficulty}"
 
     win.attron(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
     win.addstr(h // 2 - 1, w // 2 - len(wpm_str) // 2, wpm_str)
@@ -369,8 +373,9 @@ def draw_results(win, wpm, accuracy, duration, h, w, history):
     win.addstr(h // 2, w // 2 - len(acc_str) // 2, acc_str, curses.color_pair(COLOR_DIM))
     win.addstr(h // 2 + 1, w // 2 - len(dur_str) // 2, dur_str, curses.color_pair(COLOR_DIM))
 
-    # Compare to personal best
-    stats = get_stats(history, duration)
+    # Compare to personal best (same difficulty)
+    filtered = [e for e in history if e.get("difficulty", "easy") == difficulty]
+    stats = get_stats(filtered, duration)
     if stats:
         if wpm >= stats["best_wpm"]:
             badge = "new personal best!"
@@ -513,8 +518,8 @@ def show_stats_screen(win, history):
 
 # ── Test runner ──────────────────────────────────────────────────────
 
-def run_test(stdscr, duration):
-    text = generate_text(count=max(80, duration * 3))
+def run_test(stdscr, duration, difficulty="easy"):
+    text = generate_text(difficulty=difficulty, count=max(80, duration * 3))
     typed = []
     start_time = None
 
@@ -598,7 +603,9 @@ def main(stdscr):
     curses.init_pair(COLOR_TITLE, curses.COLOR_CYAN, -1)
     curses.init_pair(COLOR_GRAPH, curses.COLOR_MAGENTA, -1)
 
-    selected = 1  # default 30s
+    sel_dur = 1    # default 30s
+    sel_diff = 0   # default easy
+    menu_row = 0   # 0 = duration row, 1 = difficulty row
     stdscr.timeout(100)
 
     while True:
@@ -606,7 +613,7 @@ def main(stdscr):
         history = load_history()
 
         # --- MENU ---
-        draw_menu(stdscr, DURATIONS, selected, h, w, history)
+        draw_menu(stdscr, sel_dur, sel_diff, menu_row, h, w, history)
         key = stdscr.getch()
         if key == -1:
             continue
@@ -616,31 +623,44 @@ def main(stdscr):
             show_stats_screen(stdscr, history)
             stdscr.timeout(100)
             continue
+        if key == curses.KEY_UP:
+            menu_row = max(0, menu_row - 1)
+            continue
+        if key == curses.KEY_DOWN:
+            menu_row = min(1, menu_row + 1)
+            continue
         if key == curses.KEY_LEFT:
-            selected = max(0, selected - 1)
+            if menu_row == 0:
+                sel_dur = max(0, sel_dur - 1)
+            else:
+                sel_diff = max(0, sel_diff - 1)
             continue
         if key == curses.KEY_RIGHT:
-            selected = min(len(DURATIONS) - 1, selected + 1)
+            if menu_row == 0:
+                sel_dur = min(len(DURATIONS) - 1, sel_dur + 1)
+            else:
+                sel_diff = min(len(DIFFICULTIES) - 1, sel_diff + 1)
             continue
         if key in (curses.KEY_ENTER, 10, 13):
-            duration = DURATIONS[selected]
+            duration = DURATIONS[sel_dur]
+            difficulty = DIFFICULTIES[sel_diff]
         else:
             continue
 
         # --- TEST ---
-        wpm, accuracy = run_test(stdscr, duration)
+        wpm, accuracy = run_test(stdscr, duration, difficulty)
         if wpm is None:
             continue
 
         # Save to history
-        save_result(wpm, accuracy, duration)
+        save_result(wpm, accuracy, duration, difficulty)
         history = load_history()
 
         # --- RESULTS ---
         stdscr.timeout(-1)
         while True:
             h, w = stdscr.getmaxyx()
-            draw_results(stdscr, wpm, accuracy, duration, h, w, history)
+            draw_results(stdscr, wpm, accuracy, duration, difficulty, h, w, history)
             key = stdscr.getch()
             if key in (ord('q'), ord('Q')):
                 return
@@ -650,10 +670,10 @@ def main(stdscr):
                 continue
             if key in (curses.KEY_ENTER, 10, 13):
                 stdscr.timeout(100)
-                wpm, accuracy = run_test(stdscr, duration)
+                wpm, accuracy = run_test(stdscr, duration, difficulty)
                 if wpm is None:
                     break
-                save_result(wpm, accuracy, duration)
+                save_result(wpm, accuracy, duration, difficulty)
                 history = load_history()
                 stdscr.timeout(-1)
                 continue

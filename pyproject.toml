@@ -17,6 +17,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 
+[tool.setuptools.package-data]
+termtype = ["words.json"]
+
 [project.scripts]
 termtype = "termtype.app:cli"
 

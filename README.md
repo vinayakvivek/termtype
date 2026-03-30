@@ -5,13 +5,15 @@ A [Monkeytype](https://monkeytype.com)-style typing test that runs entirely in y
 ```
                           termtype
 
-                       select duration
+                         duration
+                      15s   30s   60s
 
-                    15s    30s    60s
+                        difficulty
+                    easy  medium  hard
 
              pb  15s: 72 wpm  |  30s: 68 wpm  |  60s: 65 wpm
 
-              ← → select · enter start · s stats · q quit
+        ← → select · ↑ ↓ row · enter start · s stats · q quit
 ```
 
 ## Install
@@ -45,6 +47,8 @@ python -m termtype
 ## Features
 
 - **Typing test** with 15s, 30s, and 60s durations
+- **Three difficulty levels** — easy (common short words), medium (moderate words), hard (longer/uncommon words)
+- **Word dictionary** — 900 words sourced from [google-10000-english](https://github.com/first20hours/google-10000-english), split by frequency and length
 - **Live feedback** — green for correct, red for wrong, underline cursor
 - **Real-time WPM and accuracy** displayed as you type
 - **Word-level wrapping** — words never split across lines
@@ -54,23 +58,32 @@ python -m termtype
 - **Personal bests** shown on the menu and compared after each test
 - **Per-duration breakdown** — separate stats for each test duration
 
+## Difficulty levels
+
+| Level    | Words | Length  | Description                        |
+|----------|-------|---------|------------------------------------|
+| **easy** | 300   | 1–5     | Common everyday words              |
+| **medium** | 300 | 4–8     | Moderate frequency, longer words   |
+| **hard** | 300   | 6–12    | Less common, challenging words     |
+
 ## Controls
 
-| Screen  | Key           | Action                |
-|---------|---------------|-----------------------|
-| Menu    | `← →`         | Select duration       |
-| Menu    | `Enter`       | Start test            |
-| Menu    | `s`           | Open stats            |
-| Menu    | `q`           | Quit                  |
-| Test    | type          | Timer starts on first key |
-| Test    | `Backspace`   | Delete last character |
-| Test    | `Esc`         | Cancel test           |
-| Results | `Enter`       | Retry same duration   |
-| Results | `Tab`         | Back to menu          |
-| Results | `s`           | Open stats            |
-| Results | `q`           | Quit                  |
-| Stats   | `← →`         | Switch time period    |
-| Stats   | `Esc` / `q`   | Back                  |
+| Screen  | Key           | Action                     |
+|---------|---------------|----------------------------|
+| Menu    | `← →`         | Select duration/difficulty |
+| Menu    | `↑ ↓`         | Switch between rows        |
+| Menu    | `Enter`       | Start test                 |
+| Menu    | `s`           | Open stats                 |
+| Menu    | `q`           | Quit                       |
+| Test    | type          | Timer starts on first key  |
+| Test    | `Backspace`   | Delete last character      |
+| Test    | `Esc`         | Cancel test                |
+| Results | `Enter`       | Retry same settings        |
+| Results | `Tab`         | Back to menu               |
+| Results | `s`           | Open stats                 |
+| Results | `q`           | Quit                       |
+| Stats   | `← →`         | Switch time period         |
+| Stats   | `Esc` / `q`   | Back                       |
 
 ## Stats screen
 
