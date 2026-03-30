@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "termtype"
+version = "0.1.0"
+description = "A Monkeytype-style typing test for your terminal"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [{ name = "Vinayak Vivek" }]
+keywords = ["typing", "typing-test", "terminal", "monkeytype", "wpm"]
+classifiers = [
+    "Environment :: Console :: Curses",
+    "Topic :: Games/Entertainment",
+    "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+termtype = "termtype.app:cli"
+
+[project.urls]
+Homepage = "https://github.com/vinayakvivek/termtype"
