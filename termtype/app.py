@@ -96,27 +96,29 @@ def draw_timer(win, remaining, duration, y, x):
 def draw_text(win, text, typed, cursor_pos, start_y, start_x, max_w):
     line_w = max_w - start_x
 
-    # Pre-compute (row, col) for each character using word-level wrapping
+    # Pre-compute (row, col) for each character using word-level wrapping.
     positions = []
     row = start_y
     col = start_x
     words = text.split(" ")
-    i = 0
     for wi, word in enumerate(words):
         if wi > 0:
-            # Check if the upcoming word (plus the space) fits on this line
-            if col - start_x + 1 + len(word) > line_w:
+            # Space + upcoming word must fit on this line
+            needed = 1 + len(word)
+            if col - start_x + needed > line_w:
+                # Wrap: place space at end of current line (invisible),
+                # then start word on next line
+                positions.append((row, col))
                 row += 1
                 col = start_x
             else:
+                # space character on same line
                 positions.append((row, col))
                 col += 1
-                i += 1
         # Word characters
         for ch in word:
             positions.append((row, col))
             col += 1
-            i += 1
 
     for i, ch in enumerate(text):
         if i >= len(positions):
