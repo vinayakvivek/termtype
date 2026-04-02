@@ -379,12 +379,12 @@ def _date_label(iso_str, period_name):
     """Format a date for x-axis based on period granularity."""
     dt = datetime.fromisoformat(iso_str)
     if period_name == "week":
-        return dt.strftime("%a")      # Mon, Tue, ...
+        return dt.strftime("%a")        # Mon, Tue, ...
     if period_name == "month":
-        return dt.strftime("%d %b")   # 05 Mar
+        return dt.strftime("%d %b")     # 05 Mar
     if period_name == "year":
-        return dt.strftime("%b")      # Mar
-    return dt.strftime("%b %y")       # Mar 25
+        return dt.strftime("%b %d")     # Mar 05
+    return dt.strftime("%b %d")         # Mar 05
 
 
 # ── Screens ──────────────────────────────────────────────────────────
@@ -624,9 +624,97 @@ def show_stats_screen(win, history):
 
 # ── Classic test runner ──────────────────────────────────────────────
 
+def _build_timeline(keystroke_log, text, duration):
+    """Build per-second WPM timeline and error positions from keystroke log.
+
+    keystroke_log: list of (elapsed_seconds, char_index, is_correct)
+    Returns: (wpm_timeline, error_times)
+        wpm_timeline: list of (second, wpm) for each second
+        error_times: list of seconds where errors occurred
+    """
+    if not keystroke_log:
+        return [], []
+
+    # Per-second rolling WPM (correct chars so far / elapsed * 12)
+    wpm_timeline = []
+    error_times = []
+    correct_count = 0
+    log_idx = 0
+
+    for sec in range(1, int(duration) + 1):
+        while log_idx < len(keystroke_log) and keystroke_log[log_idx][0] <= sec:
+            _, _, is_correct = keystroke_log[log_idx]
+            if is_correct:
+                correct_count += 1
+            log_idx += 1
+        wpm = (correct_count / 5) / (sec / 60) if sec > 0 else 0
+        wpm_timeline.append((sec, round(wpm)))
+
+    for elapsed, _, is_correct in keystroke_log:
+        if not is_correct:
+            error_times.append(elapsed)
+
+    return wpm_timeline, error_times
+
+
+def draw_post_test(win, wpm_timeline, error_times, final_wpm, accuracy, duration, h, w):
+    """Draw the post-test analysis screen with WPM graph and error markers."""
+    win.clear()
+
+    title = "test analysis"
+    win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+    win.addstr(1, w // 2 - len(title) // 2, title)
+    win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+
+    # Stats line
+    stats_str = f"wpm: {final_wpm}   accuracy: {accuracy}%   duration: {duration}s"
+    win.addstr(3, w // 2 - len(stats_str) // 2, stats_str, curses.color_pair(COLOR_STAT) | curses.A_BOLD)
+
+    if not wpm_timeline:
+        win.refresh()
+        return
+
+    # Graph area
+    pad_x = max(6, (w - 70) // 2)
+    graph_x = pad_x + 5
+    graph_w = min(60, w - graph_x - 4)
+    graph_h = min(10, h - 12)
+
+    if graph_w < 10 or graph_h < 4:
+        win.refresh()
+        return
+
+    values = [v for _, v in wpm_timeline]
+    data_points = [(f"{s}s", v) for s, v in wpm_timeline]
+
+    win.addstr(5, pad_x, "wpm over time", curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+    _draw_line_graph(win, data_points, 6, graph_x, graph_w, graph_h, COLOR_GRAPH)
+
+    # Error markers on X-axis
+    if error_times and len(wpm_timeline) > 1:
+        axis_y = 6 + graph_h + 1
+        for et in error_times:
+            # Map error time to graph x position
+            col = graph_x + int(et / duration * (graph_w - 1))
+            if graph_x <= col < graph_x + graph_w:
+                try:
+                    win.addstr(axis_y, col, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
+                except curses.error:
+                    pass
+        # Legend
+        legend_y = 6 + graph_h + 3
+        win.addstr(legend_y, pad_x, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
+        win.addstr(legend_y, pad_x + 2, f"= error ({len(error_times)} total)", curses.color_pair(COLOR_DIM))
+
+    hint = "enter to continue"
+    win.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+    win.refresh()
+
+
 def run_classic(stdscr, duration, difficulty="easy"):
     text = generate_text(difficulty=difficulty, count=max(80, duration * 3))
     typed = []
+    keystroke_log = []  # (elapsed, char_index, is_correct)
     start_time = None
 
     stdscr.timeout(100)
@@ -641,7 +729,8 @@ def run_classic(stdscr, duration, difficulty="easy"):
 
         if start_time and elapsed >= duration:
             wpm, accuracy = calc_wpm(typed, text, duration)
-            return wpm, accuracy
+            timeline, errors = _build_timeline(keystroke_log, text, duration)
+            return wpm, accuracy, timeline, errors
 
         stdscr.clear()
 
@@ -676,7 +765,7 @@ def run_classic(stdscr, duration, difficulty="easy"):
         if key == -1:
             continue
         if key == 27:
-            return None, None
+            return None, None, None, None
         if key in (curses.KEY_BACKSPACE, 127, 8):
             if typed:
                 typed.pop()
@@ -685,7 +774,11 @@ def run_classic(stdscr, duration, difficulty="easy"):
             if start_time is None:
                 start_time = time.time()
             if len(typed) < len(text):
-                typed.append(chr(key))
+                ch = chr(key)
+                idx = len(typed)
+                is_correct = ch == text[idx]
+                keystroke_log.append((time.time() - start_time, idx, is_correct))
+                typed.append(ch)
 
 
 # ── Word Rain mode ──────────────────────────────────────────────────
@@ -857,10 +950,16 @@ def run_time_attack(stdscr, difficulty="easy"):
         # Timer bar
         bar_w = min(40, w - 10)
         bar_x = w // 2 - bar_w // 2
-        filled = max(0, int(time_left / 15 * bar_w))
+        filled = max(0, min(bar_w, int(time_left / 15 * bar_w)))
+        empty = bar_w - filled
         timer_color = COLOR_CORRECT if time_left > 5 else COLOR_WRONG
-        stdscr.addstr(3, bar_x, "█" * filled, curses.color_pair(timer_color) | curses.A_BOLD)
-        stdscr.addstr(3, bar_x + filled, "░" * (bar_w - filled), curses.color_pair(COLOR_DIM))
+        try:
+            if filled > 0:
+                stdscr.addstr(3, bar_x, "█" * filled, curses.color_pair(timer_color) | curses.A_BOLD)
+            if empty > 0:
+                stdscr.addstr(3, bar_x + filled, "░" * empty, curses.color_pair(COLOR_DIM))
+        except curses.error:
+            pass
         timer_str = f" {time_left:.1f}s"
         stdscr.addstr(3, bar_x + bar_w + 1, timer_str, curses.color_pair(COLOR_STAT) | curses.A_BOLD)
 
@@ -1113,12 +1212,18 @@ def main(stdscr):
             result = run_classic(stdscr, duration, difficulty)
             if result[0] is None:
                 continue
-            wpm, accuracy = result
+            wpm, accuracy, timeline, errors = result
             save_result(wpm, accuracy, duration, difficulty)
             history = load_history()
 
-            # Results loop
+            # Post-test analysis screen
             stdscr.timeout(-1)
+            h, w = stdscr.getmaxyx()
+            draw_post_test(stdscr, timeline, errors, wpm, accuracy, duration, h, w)
+            curses.flushinp()  # discard buffered keypresses from typing
+            stdscr.getch()
+
+            # Results loop
             while True:
                 h, w = stdscr.getmaxyx()
                 draw_results(stdscr, wpm, accuracy, duration, difficulty, h, w, history)
@@ -1134,10 +1239,13 @@ def main(stdscr):
                     result = run_classic(stdscr, duration, difficulty)
                     if result[0] is None:
                         break
-                    wpm, accuracy = result
+                    wpm, accuracy, timeline, errors = result
                     save_result(wpm, accuracy, duration, difficulty)
                     history = load_history()
                     stdscr.timeout(-1)
+                    h, w = stdscr.getmaxyx()
+                    draw_post_test(stdscr, timeline, errors, wpm, accuracy, duration, h, w)
+                    stdscr.getch()
                     continue
                 if key == 9:
                     stdscr.timeout(100)
