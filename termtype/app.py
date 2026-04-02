@@ -690,17 +690,40 @@ def draw_post_test(win, wpm_timeline, error_times, final_wpm, accuracy, duration
     win.addstr(5, pad_x, "wpm over time", curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
     _draw_line_graph(win, data_points, 6, graph_x, graph_w, graph_h, COLOR_GRAPH)
 
-    # Error markers on X-axis
+    # Error markers ON the graph line
     if error_times and len(wpm_timeline) > 1:
-        axis_y = 6 + graph_h + 1
+        lo = min(values)
+        hi = max(values)
+        if lo == hi:
+            lo -= 1
+            hi += 1
+        seconds = [s for s, _ in wpm_timeline]
+
         for et in error_times:
-            # Map error time to graph x position
+            # Interpolate WPM at the error time
+            if et <= seconds[0]:
+                wpm_at = values[0]
+            elif et >= seconds[-1]:
+                wpm_at = values[-1]
+            else:
+                # Find surrounding data points
+                for j in range(len(seconds) - 1):
+                    if seconds[j] <= et <= seconds[j + 1]:
+                        t = (et - seconds[j]) / (seconds[j + 1] - seconds[j])
+                        wpm_at = values[j] + t * (values[j + 1] - values[j])
+                        break
+                else:
+                    wpm_at = values[-1]
+
+            # Map to graph coordinates
             col = graph_x + int(et / duration * (graph_w - 1))
-            if graph_x <= col < graph_x + graph_w:
+            row = 6 + int((1 - (wpm_at - lo) / (hi - lo)) * (graph_h - 1))
+            if graph_x <= col < graph_x + graph_w and 6 <= row < 6 + graph_h:
                 try:
-                    win.addstr(axis_y, col, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
+                    win.addstr(row, col, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
                 except curses.error:
                     pass
+
         # Legend
         legend_y = 6 + graph_h + 3
         win.addstr(legend_y, pad_x, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
