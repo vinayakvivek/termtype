@@ -462,38 +462,88 @@ def draw_menu(win, sel_mode, sel_dur, sel_diff, menu_row, h, w, history):
     win.refresh()
 
 
-def draw_results(win, wpm, accuracy, duration, difficulty, h, w, history):
+def draw_results(win, wpm, accuracy, duration, difficulty, h, w, history,
+                  timeline=None, error_times=None):
     win.clear()
     title = "results"
     win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
-    win.addstr(h // 2 - 4, w // 2 - len(title) // 2, title)
+    win.addstr(1, w // 2 - len(title) // 2, title)
     win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
 
+    # Stats line
     wpm_str = f"wpm: {wpm}"
     acc_str = f"accuracy: {accuracy}%"
     dur_str = f"{duration}s · {difficulty}"
 
     win.attron(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
-    win.addstr(h // 2 - 1, w // 2 - len(wpm_str) // 2, wpm_str)
+    win.addstr(3, w // 2 - len(wpm_str) // 2, wpm_str)
     win.attroff(curses.color_pair(COLOR_STAT) | curses.A_BOLD)
-    win.addstr(h // 2, w // 2 - len(acc_str) // 2, acc_str, curses.color_pair(COLOR_DIM))
-    win.addstr(h // 2 + 1, w // 2 - len(dur_str) // 2, dur_str, curses.color_pair(COLOR_DIM))
+    win.addstr(3, w // 2 + len(wpm_str) // 2 + 2, acc_str, curses.color_pair(COLOR_DIM))
+    win.addstr(3, w // 2 - len(wpm_str) // 2 - len(dur_str) - 2, dur_str, curses.color_pair(COLOR_DIM))
 
-    # Compare to personal best (same difficulty)
+    # Personal best comparison
     filtered = [e for e in history if e.get("difficulty", "easy") == difficulty]
     stats = get_stats(filtered, duration)
     if stats:
         if wpm >= stats["best_wpm"]:
             badge = "new personal best!"
-            win.addstr(h // 2 + 3, w // 2 - len(badge) // 2, badge,
+            win.addstr(5, w // 2 - len(badge) // 2, badge,
                        curses.color_pair(COLOR_STAT) | curses.A_BOLD)
         else:
             diff = wpm - stats["best_wpm"]
             cmp_str = f"pb: {stats['best_wpm']} wpm ({diff:+d})"
-            win.addstr(h // 2 + 3, w // 2 - len(cmp_str) // 2, cmp_str, curses.color_pair(COLOR_DIM))
+            win.addstr(5, w // 2 - len(cmp_str) // 2, cmp_str, curses.color_pair(COLOR_DIM))
 
-    hint = "enter retry · g graph · tab menu · s stats · q quit"
-    win.addstr(h // 2 + 6, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
+    # Inline WPM graph
+    if timeline and len(timeline) >= 2:
+        values = [v for _, v in timeline]
+        data_points = [(f"{s}s", v) for s, v in timeline]
+        pad_x = max(6, (w - 70) // 2)
+        graph_x = pad_x + 5
+        graph_w = min(60, w - graph_x - 4)
+        graph_h = min(8, h - 14)
+
+        if graph_w >= 10 and graph_h >= 3:
+            win.addstr(7, pad_x, "wpm over time", curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+            _draw_line_graph(win, data_points, 8, graph_x, graph_w, graph_h, COLOR_GRAPH)
+
+            # Error markers on the graph line
+            if error_times:
+                lo = min(values)
+                hi = max(values)
+                if lo == hi:
+                    lo -= 1
+                    hi += 1
+                seconds = [s for s, _ in timeline]
+
+                for et in error_times:
+                    if et <= seconds[0]:
+                        wpm_at = values[0]
+                    elif et >= seconds[-1]:
+                        wpm_at = values[-1]
+                    else:
+                        for j in range(len(seconds) - 1):
+                            if seconds[j] <= et <= seconds[j + 1]:
+                                t = (et - seconds[j]) / (seconds[j + 1] - seconds[j])
+                                wpm_at = values[j] + t * (values[j + 1] - values[j])
+                                break
+                        else:
+                            wpm_at = values[-1]
+
+                    col = graph_x + int(et / duration * (graph_w - 1))
+                    row = 8 + int((1 - (wpm_at - lo) / (hi - lo)) * (graph_h - 1))
+                    if graph_x <= col < graph_x + graph_w and 8 <= row < 8 + graph_h:
+                        try:
+                            win.addstr(row, col, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
+                        except curses.error:
+                            pass
+
+                err_str = f"x = error ({len(error_times)} total)"
+                win.addstr(8 + graph_h + 2, pad_x, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
+                win.addstr(8 + graph_h + 2, pad_x + 2, f"= error ({len(error_times)} total)", curses.color_pair(COLOR_DIM))
+
+    hint = "enter retry · tab menu · s stats · q quit"
+    win.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
     win.refresh()
 
 
@@ -655,83 +705,6 @@ def _build_timeline(keystroke_log, text, duration):
             error_times.append(elapsed)
 
     return wpm_timeline, error_times
-
-
-def draw_post_test(win, wpm_timeline, error_times, final_wpm, accuracy, duration, h, w):
-    """Draw the post-test analysis screen with WPM graph and error markers."""
-    win.clear()
-
-    title = "test analysis"
-    win.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
-    win.addstr(1, w // 2 - len(title) // 2, title)
-    win.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
-
-    # Stats line
-    stats_str = f"wpm: {final_wpm}   accuracy: {accuracy}%   duration: {duration}s"
-    win.addstr(3, w // 2 - len(stats_str) // 2, stats_str, curses.color_pair(COLOR_STAT) | curses.A_BOLD)
-
-    if not wpm_timeline:
-        win.refresh()
-        return
-
-    # Graph area
-    pad_x = max(6, (w - 70) // 2)
-    graph_x = pad_x + 5
-    graph_w = min(60, w - graph_x - 4)
-    graph_h = min(10, h - 12)
-
-    if graph_w < 10 or graph_h < 4:
-        win.refresh()
-        return
-
-    values = [v for _, v in wpm_timeline]
-    data_points = [(f"{s}s", v) for s, v in wpm_timeline]
-
-    win.addstr(5, pad_x, "wpm over time", curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
-    _draw_line_graph(win, data_points, 6, graph_x, graph_w, graph_h, COLOR_GRAPH)
-
-    # Error markers ON the graph line
-    if error_times and len(wpm_timeline) > 1:
-        lo = min(values)
-        hi = max(values)
-        if lo == hi:
-            lo -= 1
-            hi += 1
-        seconds = [s for s, _ in wpm_timeline]
-
-        for et in error_times:
-            # Interpolate WPM at the error time
-            if et <= seconds[0]:
-                wpm_at = values[0]
-            elif et >= seconds[-1]:
-                wpm_at = values[-1]
-            else:
-                # Find surrounding data points
-                for j in range(len(seconds) - 1):
-                    if seconds[j] <= et <= seconds[j + 1]:
-                        t = (et - seconds[j]) / (seconds[j + 1] - seconds[j])
-                        wpm_at = values[j] + t * (values[j + 1] - values[j])
-                        break
-                else:
-                    wpm_at = values[-1]
-
-            # Map to graph coordinates
-            col = graph_x + int(et / duration * (graph_w - 1))
-            row = 6 + int((1 - (wpm_at - lo) / (hi - lo)) * (graph_h - 1))
-            if graph_x <= col < graph_x + graph_w and 6 <= row < 6 + graph_h:
-                try:
-                    win.addstr(row, col, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
-                except curses.error:
-                    pass
-
-        # Legend
-        legend_y = 6 + graph_h + 3
-        win.addstr(legend_y, pad_x, "x", curses.color_pair(COLOR_WRONG) | curses.A_BOLD)
-        win.addstr(legend_y, pad_x + 2, f"= error ({len(error_times)} total)", curses.color_pair(COLOR_DIM))
-
-    hint = "enter to continue"
-    win.addstr(h - 2, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
-    win.refresh()
 
 
 def run_classic(stdscr, duration, difficulty="easy"):
@@ -1239,25 +1212,15 @@ def main(stdscr):
             save_result(wpm, accuracy, duration, difficulty)
             history = load_history()
 
-            # Post-test analysis screen
             stdscr.timeout(-1)
-            h, w = stdscr.getmaxyx()
-            draw_post_test(stdscr, timeline, errors, wpm, accuracy, duration, h, w)
-            curses.flushinp()  # discard buffered keypresses from typing
-            stdscr.getch()
-
-            # Results loop
+            curses.flushinp()
             while True:
                 h, w = stdscr.getmaxyx()
-                draw_results(stdscr, wpm, accuracy, duration, difficulty, h, w, history)
+                draw_results(stdscr, wpm, accuracy, duration, difficulty, h, w, history,
+                             timeline, errors)
                 key = stdscr.getch()
                 if key in (ord('q'), ord('Q')):
                     return
-                if key in (ord('g'), ord('G')):
-                    h, w = stdscr.getmaxyx()
-                    draw_post_test(stdscr, timeline, errors, wpm, accuracy, duration, h, w)
-                    stdscr.getch()
-                    continue
                 if key in (ord('s'), ord('S')):
                     show_stats_screen(stdscr, history)
                     stdscr.timeout(-1)
@@ -1271,10 +1234,7 @@ def main(stdscr):
                     save_result(wpm, accuracy, duration, difficulty)
                     history = load_history()
                     stdscr.timeout(-1)
-                    h, w = stdscr.getmaxyx()
-                    draw_post_test(stdscr, timeline, errors, wpm, accuracy, duration, h, w)
                     curses.flushinp()
-                    stdscr.getch()
                     continue
                 if key == 9:
                     stdscr.timeout(100)
