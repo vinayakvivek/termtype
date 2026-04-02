@@ -492,7 +492,7 @@ def draw_results(win, wpm, accuracy, duration, difficulty, h, w, history):
             cmp_str = f"pb: {stats['best_wpm']} wpm ({diff:+d})"
             win.addstr(h // 2 + 3, w // 2 - len(cmp_str) // 2, cmp_str, curses.color_pair(COLOR_DIM))
 
-    hint = "enter retry · tab menu · s stats · q quit"
+    hint = "enter retry · g graph · tab menu · s stats · q quit"
     win.addstr(h // 2 + 6, w // 2 - len(hint) // 2, hint, curses.color_pair(COLOR_DIM))
     win.refresh()
 
@@ -1230,6 +1230,11 @@ def main(stdscr):
                 key = stdscr.getch()
                 if key in (ord('q'), ord('Q')):
                     return
+                if key in (ord('g'), ord('G')):
+                    h, w = stdscr.getmaxyx()
+                    draw_post_test(stdscr, timeline, errors, wpm, accuracy, duration, h, w)
+                    stdscr.getch()
+                    continue
                 if key in (ord('s'), ord('S')):
                     show_stats_screen(stdscr, history)
                     stdscr.timeout(-1)
@@ -1245,6 +1250,7 @@ def main(stdscr):
                     stdscr.timeout(-1)
                     h, w = stdscr.getmaxyx()
                     draw_post_test(stdscr, timeline, errors, wpm, accuracy, duration, h, w)
+                    curses.flushinp()
                     stdscr.getch()
                     continue
                 if key == 9:
